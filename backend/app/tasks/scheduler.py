@@ -7,9 +7,10 @@
 """
 
 import json
+import time
 import asyncio
 from datetime import datetime, timedelta
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Tuple
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.jobstores.memory import MemoryJobStore
 from apscheduler.executors.asyncio import AsyncIOExecutor
@@ -20,7 +21,7 @@ from ..core.config import get_settings
 from ..core.database import AsyncSessionLocal
 from ..models.config import SystemConfig
 from ..models.user import User
-from ..models.task import Task, TaskLog, TaskStatus
+from ..models.task import Task, TaskLog, TaskStatus, china_now
 from ..services.login_service import LoginService
 from ..services.query_service import QueryService
 from ..services.order_service import OrderService, Passenger
@@ -73,6 +74,9 @@ class TicketScheduler:
 
         # 通知配置缓存
         self._notification_config: Dict = {}
+
+        # 登录会话检查记录（user_id -> 上次检查时间戳）
+        self._last_login_check: Dict[int, float] = {}
     
     def start(self):
         """启动调度器"""
@@ -118,6 +122,21 @@ class TicketScheduler:
 
     def _task_summary(self, task: Task) -> str:
         return f"{task.name}\n行程: {task.from_station} -> {task.to_station}\n日期: {task.train_date}"
+
+    async def _try_refresh_login(self, db: AsyncSession, user: User) -> Tuple[bool, str]:
+        """尝试静默续期 12306 登录会话，成功时同步写回数据库。"""
+        login_service = LoginService(str(user.id))
+        try:
+            ok, msg = await login_service.refresh_session()
+            if ok:
+                user.session_data = json.dumps(login_service.session.to_dict())
+                user.is_logged_in = True
+                user.login_time = login_service.session.login_time
+                await db.commit()
+                print(f"[调度] 用户 {user.username} 会话自动续期成功")
+            return ok, msg
+        finally:
+            await login_service.close()
     
     def shutdown(self):
         """关闭调度器"""
@@ -139,41 +158,80 @@ class TicketScheduler:
 
     
     async def start_task(self, task_id: int):
-        """启动抢票任务"""
+        """启动抢票任务
+
+        若任务设置了未来的开始时间，则先进入预约等待，
+        到点由 _fire_scheduled_start 自动开始执行。
+        """
         if task_id in self._active_tasks:
             return
-        
+
         self._active_tasks[task_id] = True
-        
-        # 添加定时任务
-        job_id = f"ticket_task_{task_id}"
-        
-        # 获取任务信息以确定刷票间隔
+
+        # 获取任务信息
         async with AsyncSessionLocal() as db:
             stmt = select(Task).where(Task.id == task_id)
             result = await db.execute(stmt)
             task = result.scalar_one_or_none()
-            
+
             if not task:
                 del self._active_tasks[task_id]
                 return
-            
+
+            # 设置了未来的开始时间 → 注册一次性定时任务，到点自动开始
+            if task.start_time and task.start_time > china_now():
+                self.scheduler.add_job(
+                    self._fire_scheduled_start,
+                    'date',
+                    run_date=task.start_time,
+                    id=f"ticket_task_wait_{task_id}",
+                    replace_existing=True,
+                )
+                print(f"[调度] 任务 {task_id} 已预约，将于 {task.start_time} 自动开始执行")
+                return
+
             interval = max(task.query_interval, settings.MIN_QUERY_INTERVAL)
-        
+
+        self._add_interval_job(task_id, interval)
+
+    def _add_interval_job(self, task_id: int, interval: int):
+        """注册周期刷票任务并立即执行一次。"""
         self.scheduler.add_job(
             self._run_ticket_task,
             'interval',
             seconds=interval,
-            id=job_id,
+            id=f"ticket_task_{task_id}",
             args=[task_id],
             replace_existing=True
         )
-        
         print(f"[调度] 任务 {task_id} 已启动 (间隔: {interval}秒)")
-        
         # 立即执行一次 (异步执行，避免阻塞 API)
         asyncio.create_task(self._run_ticket_task(task_id))
-    
+
+    async def _fire_scheduled_start(self, task_id: int):
+        """到达预约时间后自动开始执行任务。"""
+        if task_id not in self._active_tasks:
+            return
+
+        async with AsyncSessionLocal() as db:
+            stmt = select(Task).where(Task.id == task_id)
+            result = await db.execute(stmt)
+            task = result.scalar_one_or_none()
+
+            if not task or task.status != TaskStatus.RUNNING:
+                return
+
+            interval = max(task.query_interval, settings.MIN_QUERY_INTERVAL)
+            log = TaskLog(
+                task_id=task_id,
+                level="info",
+                message=f"到达开始时间，任务自动开始执行（间隔 {interval} 秒）"
+            )
+            db.add(log)
+            await db.commit()
+
+        self._add_interval_job(task_id, interval)
+
     async def stop_task(self, task_id: int):
         """停止抢票任务"""
         job_id = f"ticket_task_{task_id}"
@@ -184,6 +242,11 @@ class TicketScheduler:
         try:
             self.scheduler.remove_job(job_id)
             print(f"[Scheduler] 任务 {task_id} 已停止")
+        except Exception:
+            pass
+        # 同时移除预约等待任务（如果有）
+        try:
+            self.scheduler.remove_job(f"ticket_task_wait_{task_id}")
         except Exception:
             pass
     
@@ -243,6 +306,25 @@ class TicketScheduler:
                 await self.stop_task(task_id)
                 return
             
+
+            # ===== 登录会话自动续期（定时保活，避免刷票中途会话失效） =====
+            now_ts = time.time()
+            if now_ts - self._last_login_check.get(user.id, 0) >= settings.LOGIN_REFRESH_INTERVAL:
+                self._last_login_check[user.id] = now_ts
+                ok, refresh_msg = await self._try_refresh_login(db, user)
+                if not ok:
+                    task.status = TaskStatus.FAILED
+                    task.result_message = "登录已失效，自动续期失败，请重新登录"
+                    task.finished_at = datetime.utcnow() + timedelta(hours=8)
+                    await self._add_log(db, task_id, "error", f"登录自动续期失败: {refresh_msg}")
+                    self._send_notification(
+                        "12306 助手：登录已失效",
+                        f"{self._task_summary(task)}\n原因: {refresh_msg}\n请重新登录后重启任务。",
+                    )
+                    await db.commit()
+                    await self.stop_task(task_id)
+                    return
+                await self._add_log(db, task_id, "info", f"登录会话自动续期成功: {refresh_msg}")
             session_data = json.loads(user.session_data)
             # 兼容处理：如果是新格式（包含 cookies 键），取 cookies；否则假设整个对象就是 cookies 字典
             if "cookies" in session_data and isinstance(session_data["cookies"], dict):
@@ -259,6 +341,30 @@ class TicketScheduler:
                     task, cookies, db
                 )
                 
+
+                # 检测到登录失效：先尝试自动续期，成功后用新会话重试一次
+                if not success and ("未登录" in message or "登录已过期" in message):
+                    print("[调度] 检测到登录失效，尝试自动续期并重试...")
+                    ok, refresh_msg = await self._try_refresh_login(db, user)
+                    if ok:
+                        await self._add_log(
+                            db, task_id, "info", f"登录自动续期成功，正在重试: {refresh_msg}"
+                        )
+                        await db.commit()
+                        session_data = json.loads(user.session_data)
+                        cookies = (
+                            session_data["cookies"]
+                            if isinstance(session_data.get("cookies"), dict)
+                            else session_data
+                        )
+                        success, order_id, message, extra_data = await self._query_and_order(
+                            task, cookies, db
+                        )
+                    else:
+                        await self._add_log(
+                            db, task_id, "error", f"登录自动续期失败: {refresh_msg}"
+                        )
+                        await db.commit()
                 if success:
                     task.status = TaskStatus.SUCCESS
                     task.order_id = order_id

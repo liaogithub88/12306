@@ -51,6 +51,7 @@ class TaskCreate(BaseModel):
     query_interval: int = Field(5, ge=3, le=60, description="刷票间隔（秒）")
     max_retry_count: int = Field(100, description="最大重试次数（-1表示无限）")
     auto_submit: bool = Field(True, description="自动提交订单")
+    start_time: Optional[datetime] = Field(None, description="任务开始执行时间（到点自动开始），留空表示立即执行")
 
 
 class TaskUpdate(BaseModel):
@@ -74,6 +75,7 @@ class TaskUpdate(BaseModel):
     query_interval: Optional[int] = Field(None, ge=3, le=60)
     max_retry_count: Optional[int] = Field(None, description="最大重试次数（-1表示无限）")
     auto_submit: Optional[bool] = None
+    start_time: Optional[datetime] = Field(None, description="任务开始执行时间，传 null 表示清除")
 
 
 class TaskResponse(BaseModel):
@@ -96,6 +98,7 @@ class TaskResponse(BaseModel):
     query_interval: int
     max_retry_count: int
     auto_submit: bool
+    start_time: Optional[datetime]
     
     status: TaskStatusEnum
     retry_count: int

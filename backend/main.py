@@ -20,7 +20,7 @@ from fastapi.responses import JSONResponse
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.core.config import get_settings, ensure_directories
-from app.core.database import init_db, close_db
+from app.core.database import init_db, run_migrations, close_db
 from app.api import auth, trains, tasks, users, logs, config
 from app.core.terminal_logs import (
     bind_terminal_log_loop,
@@ -48,6 +48,8 @@ async def lifespan(app: FastAPI):
     
     # 初始化数据库
     await init_db()
+    # 轻量迁移（为已有表补充新增列）
+    await run_migrations()
     
     # 启动调度器
     scheduler = get_scheduler()

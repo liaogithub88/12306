@@ -472,6 +472,44 @@ class LoginService:
         self._save_session()
         return True, result
 
+    async def refresh_session(self) -> Tuple[bool, str]:
+        """尝试用现有会话静默续期（重新换取 uamtk/apptk 票据）。
+
+        当会话 cookie 仍有效但票据过期/临近过期时，可无感续期；
+        若 cookie 已完全失效（12306 要求重新登录），返回 False。
+        """
+        if not self.session.cookies:
+            return False, "无会话数据，需重新登录"
+
+        client = await self.get_client()
+        try:
+            payload = await self.request_uamtk()
+            if self._result_code(payload) != "0":
+                return False, self._result_message(payload, "会话已失效，需重新登录")
+
+            new_apptk = payload.get("newapptk") or payload.get("apptk")
+            if not new_apptk:
+                return False, "12306 未返回认证令牌"
+
+            self.session.uamtk = new_apptk
+            response = await client.post(self.UAMAUTHCLIENT_URL, data={"tk": new_apptk})
+            result = self._response_json(response)
+            if self._result_code(result) != "0":
+                return False, self._result_message(result, "票据认证失败")
+
+            self.session.apptk = result.get("apptk", "")
+            self.session.username = result.get("username", self.session.username)
+            self.session.is_logged_in = True
+            self.session.login_time = datetime.now()
+
+            for cookie in client.cookies.jar:
+                self.session.cookies[cookie.name] = cookie.value
+
+            self._save_session()
+            return True, f"会话已续期，用户 {self.session.username}"
+        except Exception as exc:
+            return False, f"会话续期异常: {exc}"
+
     def _manual_auth_result(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         code = self._result_code(payload)
         mobile = str(payload.get("mobile") or "")

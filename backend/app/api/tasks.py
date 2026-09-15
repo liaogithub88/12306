@@ -71,6 +71,7 @@ async def create_task(
         query_interval=task_data.query_interval,
         max_retry_count=task_data.max_retry_count,
         auto_submit=task_data.auto_submit,
+        start_time=task_data.start_time,
         status=TaskStatus.PENDING
     )
     
@@ -221,22 +222,30 @@ async def start_task(
     task.status = TaskStatus.RUNNING
     task.started_at = datetime.utcnow() + timedelta(hours=8)
     task.retry_count = 0
-    
+
+    # 是否设置了未来的开始时间（到点自动执行）
+    china_now = datetime.utcnow() + timedelta(hours=8)
+    scheduled = bool(task.start_time and task.start_time > china_now)
+    if scheduled:
+        log_message = f"任务已启动，将在 {task.start_time.strftime('%Y-%m-%d %H:%M:%S')} 自动开始执行"
+    else:
+        log_message = "任务已启动"
+
     # 添加日志
     log = TaskLog(
         task_id=task.id,
         level="info",
-        message="任务已启动"
+        message=log_message
     )
     db.add(log)
-    
+
     await db.commit()
-    
+
     # 通知调度器启动任务
     scheduler = get_scheduler()
     await scheduler.start_task(task_id)
-    
-    return ResponseBase(success=True, message="任务已启动")
+
+    return ResponseBase(success=True, message=log_message)
 
 
 @router.post("/{task_id}/stop", response_model=ResponseBase)

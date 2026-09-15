@@ -59,6 +59,7 @@ class Task(Base):
     query_interval: Mapped[int] = mapped_column(Integer, default=5)    # 刷票间隔（秒）
     max_retry_count: Mapped[int] = mapped_column(Integer, default=100)  # 最大重试次数
     auto_submit: Mapped[bool] = mapped_column(Boolean, default=True)   # 自动提交订单
+    start_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # 任务开始执行时间（到点自动开始，空=立即）
     
     # 状态
     status: Mapped[TaskStatus] = mapped_column(

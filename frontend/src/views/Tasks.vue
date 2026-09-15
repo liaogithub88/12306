@@ -39,9 +39,15 @@
         <el-table-column v-if="!isMobile" prop="retry_count" label="重试次数" min-width="90" align="center" />
         <el-table-column prop="status" label="状态" :min-width="isMobile ? 80 : 100" align="center">
           <template #default="{ row }">
-            <el-tag :type="getStatusType(row.status)" size="small">
+            <el-tag v-if="isWaitingStart(row)" type="warning" size="small">等待开始</el-tag>
+            <el-tag v-else :type="getStatusType(row.status)" size="small">
               {{ getStatusText(row.status) }}
             </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column v-if="!isMobile" label="开始时间" min-width="110" align="center">
+          <template #default="{ row }">
+            {{ formatStartTime(row.start_time) }}
           </template>
         </el-table-column>
         <el-table-column label="操作" :min-width="isMobile ? 180 : 230" :fixed="isMobile ? false : 'right'" align="center">
@@ -150,11 +156,20 @@ const getStatusText = (status) => {
   return texts[status] || status
 }
 
+const isWaitingStart = (row) => {
+  return row.status === 'running' && row.start_time && new Date(row.start_time).getTime() > Date.now()
+}
+
+const formatStartTime = (value) => {
+  if (!value) return '立即'
+  return String(value).slice(0, 16).replace('T', ' ')
+}
+
 const handleStart = async (task) => {
   processingTasks.value[task.id] = true
   try {
-    await taskStore.startTask(task.id)
-    ElMessage.success('任务已启动')
+    const res = await taskStore.startTask(task.id)
+    ElMessage.success(res?.message || '任务已启动')
     await taskStore.fetchTasks()
   } catch (error) {
     ElMessage.error(error.message)

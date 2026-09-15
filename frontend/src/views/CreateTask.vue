@@ -225,6 +225,22 @@
           </el-col>
         </el-row>
         
+        <el-row :gutter="20">
+          <el-col :xs="24" :sm="12">
+            <el-form-item label="开始时间">
+              <el-date-picker
+                v-model="form.start_time"
+                type="datetime"
+                placeholder="留空表示立即开始"
+                value-format="YYYY-MM-DDTHH:mm:ss"
+                :disabled-date="disablePastTime"
+                style="width: 100%;"
+              />
+              <div class="form-tip">设置后点击启动，任务将在该时间自动开始执行。</div>
+            </el-form-item>
+          </el-col>
+        </el-row>
+        
         <el-form-item>
           <el-button type="primary" @click="handleSubmit" :loading="submitting">
             {{ isEditMode ? '保存修改' : '创建任务' }}
@@ -316,7 +332,8 @@ const form = reactive({
   passengers: [],
   query_interval: 5,
   max_retry_count: 100,
-  auto_submit: true
+  auto_submit: true,
+  start_time: null
 })
 
 const isEditMode = computed(() => !!route.params.id)
@@ -525,6 +542,10 @@ const confirmAddPassengers = () => {
     passengerDialogVisible.value = false
 }
 
+const disablePastTime = (date) => {
+  return date.getTime() < Date.now() - 1000
+}
+
 const handleInfiniteChange = (val) => {
     if (val) {
         form.max_retry_count = -1
@@ -560,6 +581,7 @@ const handleSubmit = async () => {
       query_interval: form.query_interval,
       max_retry_count: form.max_retry_count,
       auto_submit: form.auto_submit,
+      start_time: form.start_time || null,
       train_codes: form.train_codes.length > 0 ? form.train_codes : [],
       start_time_range: form.start_time_min && form.start_time_max 
         ? `${form.start_time_min}-${form.start_time_max}` 
@@ -644,6 +666,7 @@ onMounted(async () => {
         form.query_interval = task.query_interval
         form.max_retry_count = task.max_retry_count
         form.auto_submit = task.auto_submit
+        form.start_time = task.start_time ? String(task.start_time).slice(0, 19) : null
         
         isInfiniteRetry.value = form.max_retry_count === -1
       }
