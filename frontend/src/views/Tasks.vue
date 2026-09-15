@@ -34,6 +34,12 @@
             {{ row.from_station }} → {{ row.to_station }}
           </template>
         </el-table-column>
+        <el-table-column v-if="!isMobile" label="抢票车次" min-width="130" align="center" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span v-if="row.train_codes">{{ row.train_codes.replace(/,/g, ' ') }}</span>
+            <span v-else style="color: #a8abb2;">不限</span>
+          </template>
+        </el-table-column>
         <el-table-column v-if="!isMobile" prop="train_date" label="日期" min-width="110" align="center" />
         <el-table-column v-if="!isMobile" prop="seat_types" label="席别" min-width="100" align="center" />
         <el-table-column v-if="!isMobile" prop="retry_count" label="重试次数" min-width="90" align="center" />

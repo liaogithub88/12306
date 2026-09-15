@@ -185,6 +185,7 @@ class TicketScheduler:
                     'date',
                     run_date=task.start_time,
                     id=f"ticket_task_wait_{task_id}",
+                    args=[task_id],
                     replace_existing=True,
                 )
                 print(f"[调度] 任务 {task_id} 已预约，将于 {task.start_time} 自动开始执行")
