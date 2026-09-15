@@ -22,7 +22,7 @@ from ..core.database import AsyncSessionLocal
 from ..models.config import SystemConfig
 from ..models.user import User
 from ..models.task import Task, TaskLog, TaskStatus, china_now
-from ..services.login_service import LoginService
+from ..services.login_service import LoginService, LoginSession
 from ..services.query_service import QueryService
 from ..services.order_service import OrderService, Passenger
 from ..utils import notify
@@ -127,6 +127,16 @@ class TicketScheduler:
         """尝试静默续期 12306 登录会话，成功时同步写回数据库。"""
         login_service = LoginService(str(user.id))
         try:
+            # 会话文件缺失/为空时，从数据库备份恢复会话再续期
+            if not getattr(login_service.session, "cookies", None) and user.session_data:
+                try:
+                    data = json.loads(user.session_data)
+                    login_service.session = LoginSession.from_dict(data)
+                    login_service._save_session()
+                    print(f"[调度] 用户 {user.username} 已从数据库备份恢复会话")
+                except Exception as exc:
+                    print(f"[调度] 用户 {user.username} 数据库会话恢复失败: {exc}")
+
             ok, msg = await login_service.refresh_session()
             if ok:
                 user.session_data = json.dumps(login_service.session.to_dict())
