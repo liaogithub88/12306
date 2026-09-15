@@ -417,13 +417,28 @@ const rules = {
   ]
 }
 
+const PRESALE_DAYS = 15
+const getTrainDateMax = () => {
+  const base = form.start_time ? new Date(String(form.start_time).replace('T', ' ')) : new Date()
+  const maxDate = new Date(base)
+  maxDate.setDate(maxDate.getDate() + PRESALE_DAYS)
+  maxDate.setHours(23, 59, 59, 999)
+  return maxDate
+}
 const disabledDate = (time) => {
   const today = new Date()
   today.setHours(0, 0, 0, 0)
-  const maxDate = new Date(today)
-  maxDate.setDate(maxDate.getDate() + 15)
-  return time.getTime() < today.getTime() || time.getTime() > maxDate.getTime()
+  return time.getTime() < today.getTime() || time.getTime() > getTrainDateMax().getTime()
 }
+
+// 预约开始时间变化时，重新校验已选的出发日期是否仍在售票范围内
+watch(() => form.start_time, (val) => {
+  if (!form.train_date) return
+  if (new Date(form.train_date).getTime() > getTrainDateMax().getTime()) {
+    form.train_date = ''
+    ElMessage.warning('出发日期已超出预约开始时间的售票范围（15 天内），请重新选择')
+  }
+})
 
 const searchFromStation = async (query) => {
   if (!query) return
@@ -567,6 +582,12 @@ const handleSubmit = async () => {
   
   const valid = await formRef.value.validate().catch(() => false)
   if (!valid) return
+
+  // 出发日期须在售票范围内：未设预约按今天起 15 天，设置了预约按预约开始时间起 15 天
+  if (form.train_date && new Date(form.train_date).getTime() > getTrainDateMax().getTime()) {
+    ElMessage.warning('出发日期超出售票范围（预约开始时间 + 15 天），请调整出发日期或预约开始时间')
+    return
+  }
   
   submitting.value = true
   try {

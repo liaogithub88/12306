@@ -276,8 +276,7 @@ class QueryService:
             today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
             if date_obj < today:
                 return [], "出发日期不能早于今天"
-            if date_obj > today + timedelta(days=15):
-                return [], "出发日期不能超过15天"
+            # 预售期外的日期不再拦截：配合任务预约开始时间，到点自动开始抢票
         except ValueError:
             return [], f"日期格式错误: {train_date}"
         
