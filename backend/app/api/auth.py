@@ -19,7 +19,9 @@ from ..core.auth import create_access_token, get_access_token_expires_in, get_cu
 from ..models.user import User
 from ..schemas.user import (
     UserResponse, LoginStatusResponse,
-    QRCodeResponse, QRCodeStatusResponse, AuthSessionResponse, LoginQRCodeResponse
+    QRCodeResponse, QRCodeStatusResponse, AuthSessionResponse, LoginQRCodeResponse,
+    PasswordLoginRequest, PasswordLoginSmsRequest, PasswordLoginSubmitRequest,
+    PasswordLoginStepResponse,
 )
 from ..schemas.common import ResponseBase
 from ..services.login_service import LoginService, QRCodeStatus
@@ -156,6 +158,139 @@ async def get_user(user_id: int, current_user: User = Depends(get_current_user))
         success=True,
         data=UserResponse.model_validate(current_user)
     )
+
+
+# ==================== 账号密码登录 ====================
+
+def _password_session_key(username: str) -> str:
+    """密码登录流程使用的临时会话 key（多步交互间保持状态）。"""
+    return f"pwd_{username.strip()}"
+
+
+async def _password_login_success(
+    login_service: LoginService,
+    username: str,
+    db: AsyncSession,
+) -> ResponseBase:
+    """密码登录成功：绑定用户、同步会话文件并返回认证会话。"""
+    railway_username = login_service.get_username() or login_service.session.username or username
+    user = await _upsert_user_by_railway_account(
+        railway_username=railway_username,
+        login_service=login_service,
+        db=db,
+    )
+    # 将会话同步保存到用户 ID 对应的会话文件，供后续任务/续期直接使用
+    svc = LoginService(str(user.id))
+    svc.session = login_service.session
+    svc._save_session()
+    auth_payload = _build_auth_session(user)
+    return ResponseBase(
+        success=True,
+        data=PasswordLoginStepResponse(
+            status="success",
+            message=f"登录成功，用户 {railway_username}",
+            auth=auth_payload,
+        ),
+    )
+
+
+@router.post("/login/password", response_model=ResponseBase[PasswordLoginStepResponse])
+async def password_login(
+    payload: PasswordLoginRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """账号密码登录（如 12306 要求验证，返回验证方式）。"""
+    username = payload.username.strip()
+    login_service = LoginService(_password_session_key(username))
+    try:
+        login_service.clear_session()
+        result = await login_service.begin_password_login(username, payload.password)
+
+        status = result.get("status")
+        if status == "success":
+            return await _password_login_success(login_service, username, db)
+
+        if status == "needs_verification":
+            available = result.get("available_verifications") or []
+            vtype = result.get("verification_type")
+            if "sms" in available:
+                vtype = "sms"
+            if vtype == "sms":
+                return ResponseBase(
+                    success=True,
+                    data=PasswordLoginStepResponse(
+                        status="needs_verification",
+                        verification_type="sms",
+                        available_verifications=available,
+                        message=result.get("message") or "请输入证件号后 4 位获取短信验证码",
+                    ),
+                )
+            # 仅滑块验证：前端暂不支持，提示改用扫码
+            base_msg = result.get("message") or "12306 要求滑块验证"
+            return ResponseBase(
+                success=False,
+                data=PasswordLoginStepResponse(
+                    status="needs_verification",
+                    verification_type=vtype or "slide",
+                    available_verifications=available,
+                    slide_token=result.get("slide_token"),
+                    message=f"{base_msg}。当前版本暂不支持滑块验证，请使用扫码登录",
+                ),
+            )
+
+        return ResponseBase(
+            success=False,
+            data=PasswordLoginStepResponse(
+                status="error",
+                message=result.get("message") or "12306 账号密码登录失败",
+            ),
+        )
+    finally:
+        await login_service.close()
+
+
+@router.post("/login/password/sms", response_model=ResponseBase)
+async def password_login_sms(payload: PasswordLoginSmsRequest):
+    """发送登录短信验证码（需证件号后 4 位）。"""
+    login_service = LoginService(_password_session_key(payload.username))
+    try:
+        result = await login_service.send_password_sms_code(payload.username, payload.cast_num)
+        code = str(result.get("result_code") or "")
+        ok = code == "0"
+        return ResponseBase(
+            success=ok,
+            message=result.get("result_message") or ("验证码已发送，请注意查收" if ok else "验证码发送失败"),
+        )
+    finally:
+        await login_service.close()
+
+
+@router.post("/login/password/submit", response_model=ResponseBase[PasswordLoginStepResponse])
+async def password_login_submit(
+    payload: PasswordLoginSubmitRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """提交账号密码登录（携带短信验证码等验证信息）。"""
+    username = payload.username.strip()
+    login_service = LoginService(_password_session_key(username))
+    try:
+        result = await login_service.submit_password_login(
+            username,
+            payload.password,
+            payload.verification,
+        )
+        status = result.get("status")
+        if status == "success":
+            return await _password_login_success(login_service, username, db)
+        return ResponseBase(
+            success=False,
+            data=PasswordLoginStepResponse(
+                status="error",
+                message=result.get("message") or "12306 登录失败",
+            ),
+        )
+    finally:
+        await login_service.close()
 
 
 # ==================== 登录状态 ====================

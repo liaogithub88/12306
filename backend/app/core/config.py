@@ -109,7 +109,7 @@ class Settings(BaseSettings):
     
     # JWT 配置（如果需要用户认证）
     SECRET_KEY: str = "please-change-secret-key-in-production"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7天
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 30  # 30天（避免频繁重新登录）
 
     # 安全开关：默认关闭全局终端日志流，避免多用户环境下的信息泄露
     ENABLE_TERMINAL_LOG_STREAM: bool = False

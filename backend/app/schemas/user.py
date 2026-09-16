@@ -72,3 +72,32 @@ class QRCodeStatusResponse(BaseModel):
     message: str
     is_success: bool = False
     auth: Optional[AuthSessionResponse] = None
+
+
+class PasswordLoginRequest(BaseModel):
+    """账号密码登录请求"""
+    username: str = Field(..., min_length=1, max_length=100, description="12306 账号")
+    password: str = Field(..., min_length=1, max_length=200, description="12306 密码")
+
+
+class PasswordLoginSmsRequest(BaseModel):
+    """发送登录短信验证码请求"""
+    username: str = Field(..., min_length=1, max_length=100, description="12306 账号")
+    cast_num: str = Field(..., min_length=1, max_length=20, description="证件号后 4 位（用于接收验证码）")
+
+
+class PasswordLoginSubmitRequest(BaseModel):
+    """提交密码登录请求（含验证信息）"""
+    username: str = Field(..., min_length=1, max_length=100, description="12306 账号")
+    password: str = Field(..., min_length=1, max_length=200, description="12306 密码")
+    verification: dict = Field(default_factory=dict, description="验证信息，如 {'type': 'sms', 'sms_code': '1234'}")
+
+
+class PasswordLoginStepResponse(BaseModel):
+    """密码登录分步响应"""
+    status: str  # success / needs_verification / error
+    message: str
+    auth: Optional[AuthSessionResponse] = None
+    verification_type: Optional[str] = None
+    available_verifications: Optional[list] = None
+    slide_token: Optional[str] = None

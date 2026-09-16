@@ -113,6 +113,18 @@ export default {
   checkLoginQRCodeStatus(challengeId) {
     return request.get(`/auth/login/qrcode/${challengeId}/status`)
   },
+
+  passwordLogin(data) {
+    return request.post('/auth/login/password', data)
+  },
+
+  sendPasswordSmsCode(data) {
+    return request.post('/auth/login/password/sms', data)
+  },
+
+  submitPasswordLogin(data) {
+    return request.post('/auth/login/password/submit', data)
+  },
   
   logout() {
     return request.post('/auth/logout')
