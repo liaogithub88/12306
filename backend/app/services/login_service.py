@@ -101,6 +101,8 @@ class LoginService:
     
     # 用户会话存储（内存 + 文件持久化）
     _sessions: Dict[str, LoginSession] = {}
+    # 每个用户会话的续期互斥锁（防止任务保活/界面操作并发换票互相覆盖）
+    _refresh_locks: Dict[str, "asyncio.Lock"] = {}
     _session_dir: Path = None
     
     def __init__(self, user_id: str = "default"):
@@ -481,6 +483,12 @@ class LoginService:
         if not self.session.cookies:
             return False, "无会话数据，需重新登录"
 
+        # 同一用户并发续期互斥（任务保活 / 全局保活 / 界面操作可能同时触发）
+        lock = LoginService._refresh_locks.setdefault(self.user_id, asyncio.Lock())
+        async with lock:
+            return await self._refresh_session_locked()
+
+    async def _refresh_session_locked(self) -> Tuple[bool, str]:
         client = await self.get_client()
         try:
             payload = await self.request_uamtk()

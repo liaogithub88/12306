@@ -84,6 +84,16 @@ class TicketScheduler:
             self.scheduler.start()
             print("[调度] 调度器已启动")
             asyncio.create_task(self.reload_notification_config())
+            # 全局登录会话保活：定时为所有已登录用户静默续期，
+            # 避免用户长时间不操作（无任务在跑）导致 12306 会话过期
+            self.scheduler.add_job(
+                self._keepalive_all_logins,
+                'interval',
+                seconds=settings.LOGIN_REFRESH_INTERVAL,
+                id="login_keepalive",
+                replace_existing=True,
+            )
+            print(f"[调度] 已注册全局登录会话保活（每 {settings.LOGIN_REFRESH_INTERVAL} 秒）")
 
     async def reload_notification_config(self):
         """重新加载通知配置。"""
@@ -148,6 +158,40 @@ class TicketScheduler:
         finally:
             await login_service.close()
     
+    async def _keepalive_all_logins(self):
+        """全局登录会话保活：扫描所有已登录用户并静默续期。
+
+        与任务内的保活互相独立：即使没有任何任务在运行，
+        登录会话也会周期性刷新，挂机一天后界面操作无需重新登录。
+        """
+        try:
+            async with AsyncSessionLocal() as db:
+                stmt = select(User.id).where(
+                    User.is_logged_in == True,
+                    User.is_active == True,
+                )
+                result = await db.execute(stmt)
+                user_ids = [row[0] for row in result.all()]
+        except Exception as exc:
+            print(f"[调度] 全局保活: 扫描已登录用户失败: {exc}")
+            return
+
+        for uid in user_ids:
+            try:
+                async with AsyncSessionLocal() as db:
+                    stmt = select(User).where(User.id == uid)
+                    result = await db.execute(stmt)
+                    user = result.scalar_one_or_none()
+                    if not user:
+                        continue
+                    ok, msg = await self._try_refresh_login(db, user)
+                    if ok:
+                        print(f"[调度] 全局保活: 用户 {user.username} 会话续期成功")
+                    else:
+                        print(f"[调度] 全局保活: 用户 {user.username} 会话续期失败: {msg}")
+            except Exception as exc:
+                print(f"[调度] 全局保活: 用户 {uid} 异常: {exc}")
+
     def shutdown(self):
         """关闭调度器"""
         if self.scheduler.running:

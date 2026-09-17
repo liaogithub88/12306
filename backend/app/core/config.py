@@ -81,7 +81,7 @@ class Settings(BaseSettings):
     DEFAULT_QUERY_INTERVAL: int = 5  # 默认刷票间隔（秒）
     MIN_QUERY_INTERVAL: int = 3      # 最小刷票间隔（秒）
     MAX_QUERY_INTERVAL: int = 60     # 最大刷票间隔（秒）
-    LOGIN_REFRESH_INTERVAL: int = 600  # 登录会话自动续期间隔（秒），默认 10 分钟
+    LOGIN_REFRESH_INTERVAL: int = 300  # 5 分钟（全局会话保活/任务保活共用）  # 登录会话自动续期间隔（秒），默认 10 分钟
     
     # 12306 相关配置
     @property
